@@ -1,20 +1,25 @@
-// this felt too small to do a whole repo for it so I'm just chucking it here for the moment
-
 <?php
-$tempjson = file_get_contents("http://localhost:9090/api/v1/query?query=temperature");
+$prometheus = "http://localhost:9090";
+$skipsensors = ['TestPico', 'DefaultSensorName'];
+$tempjson = file_get_contents($prometheus."/api/v1/query?query=temperature");
 $tempdata = json_decode($tempjson, true);
 $sensors = $tempdata['data']['result'];
 $data = [];
 foreach($sensors as $sensor) {
+	if(in_array($sensor['metric']['sensor_name'], $skipsensors)) continue;
 	$data[$sensor['metric']['friendly_name']] = [];
 	$data[$sensor['metric']['friendly_name']]['temp'] = $sensor['value'][1];
 	$data[$sensor['metric']['friendly_name']]['updated'] = $sensor['value'][0];
+	$updated = $sensor['value'][0];
+	if($sensor['metric']['sensor_name'] == "Outside") $outside = $sensor['value'][1];
 }
+$updated_string = date("D M j G:i:s T Y", $updated);
 
-$chgjson = file_get_contents("http://localhost:9090/api/v1/query?query=deriv(temperature[15m])");
+$chgjson = file_get_contents($prometheus."/api/v1/query?query=deriv(temperature[15m])");
 $chgdata = json_decode($chgjson, true);
 $sensors = $chgdata['data']['result'];
 foreach($sensors as $sensor) {
+	if(in_array($sensor['metric']['sensor_name'], $skipsensors)) continue;
 	$data[$sensor['metric']['friendly_name']]['chgv'] = $sensor['value'][1];
 	if($sensor['value'][1] > 0) {
 		$data[$sensor['metric']['friendly_name']]['chg'] = "rising";
@@ -28,13 +33,33 @@ foreach($sensors as $sensor) {
 	}
 }
 
+$minjson = file_get_contents($prometheus."/api/v1/query?query=min_over_time(temperature[24h])");
+$mindata = json_decode($minjson, true);
+$sensors = $mindata['data']['result'];
+foreach($sensors as $sensor) {
+	if(in_array($sensor['metric']['sensor_name'], $skipsensors)) continue;
+	$data[$sensor['metric']['friendly_name']]['min'] = $sensor['value'][1];
+}
+
+$maxjson = file_get_contents($prometheus."/api/v1/query?query=max_over_time(temperature[24h])");
+$maxdata = json_decode($maxjson, true);
+$sensors = $maxdata['data']['result'];
+foreach($sensors as $sensor) {
+	if(in_array($sensor['metric']['sensor_name'], $skipsensors)) continue;
+	$data[$sensor['metric']['friendly_name']]['max'] = $sensor['value'][1];
+}
+
 if(preg_match('/^(curl|Wget|libwww)/', $_SERVER['HTTP_USER_AGENT'])) {
 	header("Content-Type: text/plain");
+	#print_r($tempdata['data']['result']);
+	#print_r($chgdata['data']['result']);
+	#print_r($data);
 	foreach($data as $sensor_name => $sensor_data) {
-		printf("%s %6.2f °C - %s\n", $sensor_data['chgi'], $sensor_data['temp'], $sensor_name);
+		printf("%s %5.1f °C %5.1f °C %5.1f °C - %s\n", $sensor_data['chgi'], $sensor_data['min'], $sensor_data['temp'], $sensor_data['max'], $sensor_name);
 	}
+	echo "Fetched at $updated_string\n";
 	exit;
-} else {
+}
 ?>
 <!DOCTYPE html>
 <html>
@@ -51,20 +76,49 @@ tr:nth-child(odd) {
 	background-color: #ddd;
 }
 table {
-	width: 600px;
+	width: 800px;
 	margin-left: 10px;
 	margin-right: 10px;
 }
 .smaller {
 	font-size: 50%;
 }
-@media (max-width: 600px) {
+.outside {
+	font-size: 800%;
+	text-align: center;
+	width: 800px;
+	margin: 10px;
+}
+@media (max-width: 800px) {
 	table {
 		width: 100%;
 		margin: 2px;
 	}
 	h1 {
 		text-align: center;
+	}
+	.outside {
+		font-size: 800%;
+		text-align: center;
+		width: 100%;
+		margin: 2px;
+	}
+}
+@media (orientation: landscape) {
+	.landonly {
+		display: table-cell;
+	}
+	.temp {
+		width: 125px;
+		text-align: right;
+	}
+}
+@media (orientation: portrait) {
+	.landonly {
+		display: none;
+	}
+	.temp {
+		text-align: right;
 	}
 }
 	</style>
@@ -76,23 +130,23 @@ table {
 	<p>
 		<table>
 <?php
-}
 foreach($data as $sensor_name => $sensor_data) {
 	echo "\t\t\t<tr align=center>";
-	if($sensor_data['chg'] == "rising") {
-		echo "<td>".sprintf("%6.2f", $sensor_data['temp'])." &deg;C &uarr;</td>";
-	} elseif($sensor_data['chg'] == "falling") {
-		echo "<td>".sprintf("%6.2f", $sensor_data['temp'])." &deg;C &darr;</td>";
-	} else {
-		echo "<td>".sprintf("%6.2f", $sensor_data['temp'])." &deg;C &rarr;</td>";
-	}
+	echo "<td align=right class='temp landonly'>".sprintf(" %5.1f", $sensor_data['min'])." &deg;C </td>";
+	echo "<td align=right class='temp'>".sprintf(" %5.1f", $sensor_data['temp'])." &deg;C ".$sensor_data['chgi']."</td>";
+	echo "<td align=right class='temp landonly'>".sprintf(" %5.1f", $sensor_data['max'])." &deg;C </td>";
 	echo "<td>".$sensor_name;
-	echo "<br/><span class=smaller>Latest: ".date("D M j G:i:s T Y", $sensor_data['updated'])."</span>";
 	echo "</td>";
 	echo "</tr>\n";
 }
+echo "<tr align=center><td colspan=4>Last updated at $updated_string</td></tr>\n";
+#echo "<!--"; print_r($data); echo "-->";
 ?>
 		</table>
+	</p>
+	<p>
+	<h1>Outside</h1>
+	<div class=outside><?php echo sprintf("%d", round($outside)); ?>&deg;C</div>
 	</p>
 </body>
 </html>
